@@ -31,7 +31,7 @@ def tick():
 ###################################################################################
 
 def contact():
-    mess._show(title='Contact us', message="Please contact us on : 'shubhamkumar8180323@gmail.com' ")
+    mess._show(title='Contact us', message="Please contact us on : '8180323@gmail.com' ")
 
 ###################################################################################
 
@@ -215,9 +215,9 @@ def TakeImages():
 
 def TrainImages():
     assure_path_exists("TrainingImageLabel/")
-    recognizer = cv2.face.LBPHFaceRecognizer_create()  # No change needed here
+    recognizer = cv2.face.LBPHFaceRecognizer_create() 
     
-    faces, IDs = getImagesAndLabels("TrainingImage")  # Updated below to use dlib
+    faces, IDs = getImagesAndLabels("TrainingImage")  
 
     if len(faces) == 0:
         mess._show(title='No Registrations', message='Please Register someone first!!!')
