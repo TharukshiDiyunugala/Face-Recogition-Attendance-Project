@@ -245,27 +245,26 @@ def getImagesAndLabels(path):
         pilImage = Image.open(imagePath).convert('L')
         imageNp = np.array(pilImage, 'uint8')
 
-        # Extract ID from filename
+        # Extract serial number from filename (format: name.serial.id.samplenum.jpg)
         try:
-            ID = int(os.path.split(imagePath)[-1].split(".")[1])
+            filename_parts = os.path.split(imagePath)[-1].split(".")
+            serial = int(filename_parts[1])  # Use serial number
         except:
+            print(f"Skipping malformed filename: {imagePath}")
             continue  # skip malformed filenames
 
-        # Detect face with dlib
-        detected_faces = detector(imageNp)
-
-        for face in detected_faces:
-            x, y, w, h = face.left(), face.top(), face.width(), face.height()
-            face_crop = imageNp[y:y + h, x:x + w]
-            faces.append(face_crop)
-            IDs.append(ID)
-
+        # Since images are already cropped faces, just resize them
+        face_resized = cv2.resize(imageNp, (100, 100))
+        faces.append(face_resized)
+        IDs.append(serial)
+        
+    print(f"Loaded {len(faces)} face images for training with IDs: {set(IDs)}")
     return faces, IDs
 
 
 ###########################################################################################
 
-import dlib  # Make sure this is imported at the top
+import dlib  
 
 def TrackImages():
     assure_path_exists("Attendance/")
@@ -273,10 +272,6 @@ def TrackImages():
 
     for k in tv.get_children():
         tv.delete(k)
-
-    msg = ''
-    i = 0
-    j = 0
 
     recognizer = cv2.face.LBPHFaceRecognizer_create()
     if os.path.isfile("TrainingImageLabel\\Trainner.yml"):
@@ -288,7 +283,6 @@ def TrackImages():
     cam = cv2.VideoCapture(0)
     detector = dlib.get_frontal_face_detector()
     font = cv2.FONT_HERSHEY_SIMPLEX
-    col_names = ['Id', '', 'Name', '', 'Date', '', 'Time']
 
     if os.path.isfile("StudentDetails\\StudentDetails.csv"):
         df = pd.read_csv("StudentDetails\\StudentDetails.csv")
@@ -296,10 +290,25 @@ def TrackImages():
         mess._show(title='Details Missing', message='Students details are missing, please check!')
         cam.release()
         cv2.destroyAllWindows()
-        window.destroy()
+        return
+
+    ts = time.time()
+    date = datetime.datetime.fromtimestamp(ts).strftime('%d-%m-%Y')
+    file_path = f"Attendance\\Attendance_{date}.csv"
+    
+    # Create attendance file if it doesn't exist
+    if not os.path.isfile(file_path):
+        with open(file_path, 'w', newline='') as csvFile1:
+            writer = csv.writer(csvFile1)
+            writer.writerow(['Id', '', 'Name', '', 'Date', '', 'Time'])
+
+    recorded_ids = set()  # Track who has been marked present
 
     while True:
         ret, im = cam.read()
+        if not ret:
+            break
+            
         gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
         faces = detector(gray)
 
@@ -308,54 +317,72 @@ def TrackImages():
             cv2.rectangle(im, (x, y), (x + w, y + h), (225, 0, 0), 2)
 
             try:
-                serial, conf = recognizer.predict(gray[y:y + h, x:x + w])
-            except:
+                # Extract the face region for prediction
+                face_crop = gray[y:y + h, x:x + w]
+                
+                # Resize face to SAME size as training (100x100)
+                face_crop = cv2.resize(face_crop, (100, 100))
+                
+                # Predict the face
+                serial, conf = recognizer.predict(face_crop)
+                
+                print(f"Detected Serial: {serial}, Confidence: {conf}")  # Debug info
+                
+                # LBPH: lower confidence = better match (typically < 50-80 is good)
+                if conf < 100:  # More lenient threshold for testing
+                    # Look up student info
+                    aa = df.loc[df['SERIAL NO.'] == serial]['NAME'].values
+                    ID = df.loc[df['SERIAL NO.'] == serial]['ID'].values
+
+                    if len(aa) > 0 and len(ID) > 0:
+                        ID_str = str(ID[0])
+                        name = str(aa[0])
+                        
+                        # Only record attendance once per person per session
+                        if serial not in recorded_ids:
+                            ts = time.time()
+                            timeStamp = datetime.datetime.fromtimestamp(ts).strftime('%H:%M:%S')
+                            attendance = [ID_str, '', name, '', str(date), '', str(timeStamp)]
+
+                            # Write attendance to file
+                            with open(file_path, 'a', newline='') as csvFile1:
+                                writer = csv.writer(csvFile1)
+                                writer.writerow(attendance)
+                            
+                            recorded_ids.add(serial)
+                            cv2.putText(im, f"{name} - Marked", (x, y - 10), font, 0.8, (0, 255, 0), 2)
+                        else:
+                            # Already recorded
+                            cv2.putText(im, f"{name} - Already Marked", (x, y - 10), font, 0.8, (255, 255, 0), 2)
+                    else:
+                        cv2.putText(im, f"Unknown ID:{serial}", (x, y - 10), font, 0.8, (0, 0, 255), 2)
+                else:
+                    cv2.putText(im, f"Unknown (conf:{conf:.1f})", (x, y - 10), font, 0.8, (0, 0, 255), 2)
+                    
+            except Exception as e:
+                print(f"Error processing face: {e}")
+                cv2.putText(im, "Error", (x, y - 10), font, 0.8, (0, 0, 255), 2)
                 continue
 
-            if conf < 50:
-                ts = time.time()
-                date = datetime.datetime.fromtimestamp(ts).strftime('%d-%m-%Y')
-                timeStamp = datetime.datetime.fromtimestamp(ts).strftime('%H:%M:%S')
-                aa = df.loc[df['SERIAL NO.'] == serial]['NAME'].values
-                ID = df.loc[df['SERIAL NO.'] == serial]['ID'].values
-
-                ID = str(ID)[1:-1]
-                bb = str(aa)[2:-2]
-                attendance = [str(ID), '', bb, '', str(date), '', str(timeStamp)]
-            else:
-                bb = 'Unknown'
-
-            cv2.putText(im, str(bb), (x, y + h), font, 1, (255, 255, 255), 2)
-
         cv2.imshow('Taking Attendance', im)
-        if cv2.waitKey(1) == ord('q'):
+        
+        # Press 'q' to quit
+        if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-
-    ts = time.time()
-    date = datetime.datetime.fromtimestamp(ts).strftime('%d-%m-%Y')
-    file_path = "Attendance\\Attendance_" + date + ".csv"
-
-    if os.path.isfile(file_path):
-        with open(file_path, 'a+', newline='') as csvFile1:
-            writer = csv.writer(csvFile1)
-            writer.writerow(attendance)
-    else:
-        with open(file_path, 'a+', newline='') as csvFile1:
-            writer = csv.writer(csvFile1)
-            writer.writerow(col_names)
-            writer.writerow(attendance)
-
-    with open(file_path, 'r') as csvFile1:
-        reader1 = csv.reader(csvFile1)
-        for lines in reader1:
-            i += 1
-            if i > 1 and i % 2 != 0:
-                iidd = str(lines[0]) + '   '
-                tv.insert('', 0, text=iidd, values=(str(lines[2]), str(lines[4]), str(lines[6])))
 
     cam.release()
     cv2.destroyAllWindows()
 
+    # Update the treeview with today's attendance
+    if os.path.isfile(file_path):
+        with open(file_path, 'r') as csvFile1:
+            reader1 = csv.reader(csvFile1)
+            next(reader1)  # Skip header
+            for lines in reader1:
+                if len(lines) >= 7:
+                    tv.insert('', 0, text=lines[0], values=(lines[2], lines[4], lines[6]))
+
+    mess._show(title='Attendance Completed', message=f'Attendance marked for {len(recorded_ids)} student(s)')
 
 ######################################## USED STUFFS ############################################
     
@@ -403,10 +430,10 @@ frame3.place(relx=0.52, rely=0.09, relwidth=0.09, relheight=0.07)
 frame4 = tk.Frame(window, bg="#c4c6ce")
 frame4.place(relx=0.36, rely=0.09, relwidth=0.16, relheight=0.07)
 
-datef = tk.Label(frame4, text = day+"-"+mont[month]+"-"+year+"  |  ", fg="#0a0909",bg="#fafdf5" ,width=100 ,height=1,font=('comic', 22, ' bold '))
+datef = tk.Label(frame4, text = day+"-"+mont[month]+"-"+year, fg="#0a0909",bg="#fafdf5" ,width=100 ,height=1,font=('comic', 12, ' bold '))
 datef.pack(fill='both',expand=1)
 
-clock = tk.Label(frame3,fg="#0a0909",bg="#fafdf5" ,width=55 ,height=1,font=('comic', 22, ' bold '))
+clock = tk.Label(frame3,fg="#0a0909",bg="#fafdf5" ,width=55 ,height=1,font=('comic', 12, ' bold '))
 clock.pack(fill='both',expand=1)
 tick()
 
